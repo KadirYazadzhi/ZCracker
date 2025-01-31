@@ -49,9 +49,11 @@
    ```sh
    dotnet run
    ```
+   
 2. **Enter the required paths:**
    - 📁 Path to the target ZIP archive.
    - 📄 Path to the password list file.
+     
 3. 🚀 The program will attempt to extract the archive using all passwords from the provided list.
 
 ### ⚠️ Important Limitations
@@ -60,13 +62,14 @@
 - 🔄 Consider splitting larger files into smaller chunks.
 
 ## ⚡ Performance
-- 🔹 **10,000 passwords**: ~4 seconds
-- 🔹 **50,000 passwords**: ~10-12 seconds
-- 🔹 **100,000 passwords**: ~25-30 seconds
+- 🔹 **10,000 passwords**: ~5 seconds
+- 🔹 **50,000 passwords**: ~20-25 seconds
+- 🔹 **100,000 passwords**: ~40-60 seconds
 - 🔴 **Over 100,000 passwords**: ❌ **NOT SUPPORTED (May cause instability)**
 
 ## ⚖️ Legal Disclaimer
-This tool is intended for **educational** and **lawful penetration testing** purposes only. ❌ **Unauthorized use against systems you do not own or have explicit permission to test is illegal.** The developer is not responsible for any misuse of this tool.
+- This tool is intended for **educational** and **lawful penetration testing** purposes only. 
+- ❌ **Unauthorized use against systems you do not own or have explicit permission to test is illegal.** The developer is not responsible for any misuse of this tool.
 
 ## 📜 License
 This project is licensed under the **MIT License** - see the LICENSE file for details.
