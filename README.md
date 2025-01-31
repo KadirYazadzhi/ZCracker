@@ -1,4 +1,4 @@
-# 🚀 ZCracker - High-Performance Archive Brute Forcer 🔓
+# 🚀 ZCracker - Archive Brute Forcer 🔓
 
 ## 🔍 Overview
 ZCracker is a ⚡ multi-threaded brute-force tool designed to crack password-protected ZIP archives efficiently. It utilizes **asynchronous programming** and **parallel processing** to maximize performance, making it significantly faster than traditional brute-force methods.
@@ -61,4 +61,13 @@ ZCracker is a ⚡ multi-threaded brute-force tool designed to crack password-pro
 
 ## 📜 License
 This project is licensed under the **MIT License** - see the LICENSE file for details.
+
+### ⚖️ What does this mean?
+- ✅ You are free to use, modify, and distribute this software.
+- ✅ You can use it for both personal and commercial projects.
+- ❌ You cannot hold the author liable for any damages or misuse.
+  
+---
+
+🌟 If you like this project, consider giving it a star! ⭐
 
