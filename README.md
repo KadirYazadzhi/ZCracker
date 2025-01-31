@@ -1,7 +1,7 @@
-# 🚀 7Cracker - High-Performance Archive Brute Forcer 🔓
+# 🚀 ZCracker - High-Performance Archive Brute Forcer 🔓
 
 ## 🔍 Overview
-7Cracker is a ⚡ multi-threaded brute-force tool designed to crack password-protected ZIP archives efficiently. It utilizes **asynchronous programming** and **parallel processing** to maximize performance, making it significantly faster than traditional brute-force methods.
+ZCracker is a ⚡ multi-threaded brute-force tool designed to crack password-protected ZIP archives efficiently. It utilizes **asynchronous programming** and **parallel processing** to maximize performance, making it significantly faster than traditional brute-force methods.
 
 <img src="zcracker-preview.png">
 
@@ -20,7 +20,7 @@
 ### 📥 Setup
 1. Clone this repository:
    ```sh
-   git clone https://github.com/yourusername/7cracker.git
+   git clone https://github.com/KadirYazadzhi/ZCracker.git
    cd 7cracker
    ```
 2. Build the project:
@@ -33,7 +33,7 @@
    ```
 
 ## 📌 Usage
-1. **Run 7Cracker**
+1. **Run ZCracker**
    ```sh
    dotnet run
    ```
