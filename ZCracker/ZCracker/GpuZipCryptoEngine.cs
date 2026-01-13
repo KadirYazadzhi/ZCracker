@@ -27,10 +27,18 @@ namespace ZCracker
                 _context = Context.Create(builder => builder.Cuda().OpenCL().CPU());
                 
                 // Prefer CUDA, then OpenCL.
-                var cudaDevice = _context.GetCudaDevices().FirstOrDefault();
-                var clDevice = _context.GetCLDevices().FirstOrDefault();
+                var cudaDevices = _context.GetCudaDevices();
+                var clDevices = _context.GetCLDevices();
                 
-                Device? device = (Device?)cudaDevice ?? clDevice;
+                Device? device = null;
+                if (cudaDevices.Count > 0)
+                {
+                    device = cudaDevices[0];
+                }
+                else if (clDevices.Count > 0)
+                {
+                    device = clDevices[0];
+                }
 
                 if (device != null)
                 {

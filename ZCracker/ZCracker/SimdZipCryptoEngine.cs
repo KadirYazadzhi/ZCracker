@@ -41,10 +41,12 @@ namespace ZCracker
         
         // Helper for Bitwise Blend (Select) to avoid casting to Byte/Double for BlendVariable
         // Returns: (left & ~mask) | (right & mask)
+        // Avx2.AndNot(a, b) computes (~a) & b
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static Vector256<uint> Blend(Vector256<uint> left, Vector256<uint> right, Vector256<uint> mask)
         {
-             return Avx2.Or(Avx2.And(left, Avx2.Not(mask)), Avx2.And(right, mask));
+             // (~mask) & left  |  mask & right
+             return Avx2.Or(Avx2.AndNot(mask, left), Avx2.And(right, mask));
         }
 
         /// <summary>
