@@ -1,8 +1,11 @@
 {
   "version": 2,
-  "dgSpecHash": "klVxYtsT4fM=",
+  "dgSpecHash": "D/23VcrgzQ4=",
   "success": true,
   "projectFilePath": "/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/ZCracker.csproj",
-  "expectedPackageFiles": [],
+  "expectedPackageFiles": [
+    "/home/anonymous/.nuget/packages/ilgpu/1.5.3/ilgpu.1.5.3.nupkg.sha512",
+    "/home/anonymous/.nuget/packages/ilgpu.algorithms/1.5.3/ilgpu.algorithms.1.5.3.nupkg.sha512"
+  ],
   "logs": []
 }
