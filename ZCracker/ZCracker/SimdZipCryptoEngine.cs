@@ -38,15 +38,18 @@ namespace ZCracker
                 CrcTable[i] = crc;
             }
         }
+        
+        // Helper for Bitwise Blend (Select) to avoid casting to Byte/Double for BlendVariable
+        // Returns: (left & ~mask) | (right & mask)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static Vector256<uint> Blend(Vector256<uint> left, Vector256<uint> right, Vector256<uint> mask)
+        {
+             return Avx2.Or(Avx2.And(left, Avx2.Not(mask)), Avx2.And(right, mask));
+        }
 
         /// <summary>
         /// Checks a batch of 8 passwords using AVX2.
         /// </summary>
-        /// <param name="encryptedHeader">The 12 byte header.</param>
-        /// <param name="crcCheck">The target verification byte.</param>
-        /// <param name="passwords">Array of 8 pointers to password strings (char*).</param>
-        /// <param name="lengths">Array of 8 lengths.</param>
-        /// <returns>Index of found password or -1.</returns>
         public int CheckBatch(byte[] encryptedHeader, uint crcCheck, char** passwords, int* lengths)
         {
             // Initial State
@@ -54,28 +57,23 @@ namespace ZCracker
             Vector256<uint> vKey1 = Vector256.Create(591751049u);
             Vector256<uint> vKey2 = Vector256.Create(878082192u);
 
-            // Determine max length to loop
+            // Determine max length
             int maxLen = 0;
             for(int i=0; i<8; i++) maxLen = Math.Max(maxLen, lengths[i]);
+
+            uint* pChars = stackalloc uint[8];
+            uint* pActive = stackalloc uint[8];
 
             // 1. Process Passwords (SIMD)
             for (int i = 0; i < maxLen; i++)
             {
-                // Gather characters for position i
-                // We construct a vector of chars (promoted to uint)
-                // If i >= length, we effectively treat it as 0 or handle masking? 
-                // ZipCrypto state must NOT update if we are past end of password.
-                // This implies we need a mask for active lanes.
-                
-                uint* pChars = stackalloc uint[8];
-                uint* pActive = stackalloc uint[8];
-                
+                // Prepare chars and mask
                 for(int lane=0; lane<8; lane++)
                 {
                     if (i < lengths[lane])
                     {
                         pChars[lane] = (byte)passwords[lane][i];
-                        pActive[lane] = 0xFFFFFFFF; // All 1s
+                        pActive[lane] = 0xFFFFFFFF; 
                     }
                     else
                     {
@@ -87,20 +85,19 @@ namespace ZCracker
                 Vector256<uint> vChar = Avx.LoadVector256(pChars);
                 Vector256<uint> vMask = Avx.LoadVector256(pActive);
                 
-                // If no lanes are active, break (optimization)
-                if (Avx.TestZ(vMask, vMask)) break; // Actually can't break early if we just use maxLen loop but okay.
-
                 // Update Key0
                 // index = (key0 ^ c) & 0xff
                 Vector256<uint> vIndex = Avx2.And(Avx2.Xor(vKey0, vChar), VecCrcMaskFF);
                 
                 // key0 = CrcTable[index] ^ (key0 >> 8)
-                // GATHER: Base=CrcTable, Index=vIndex, Scale=4
-                Vector256<uint> vCrcLookup = Avx2.GatherVectorInt32(CrcTable, vIndex, 4);
+                // Gather requires int* and Vector256<int>. 4 is scale (sizeof uint).
+                Vector256<int> vCrcLookupInt = Avx2.GatherVector256((int*)CrcTable, vIndex.AsInt32(), 4);
+                Vector256<uint> vCrcLookup = vCrcLookupInt.AsUInt32();
+                
                 Vector256<uint> vKey0New = Avx2.Xor(vCrcLookup, Avx2.ShiftRightLogical(vKey0, 8));
                 
                 // Blend: Only update if active
-                vKey0 = Avx.BlendVariable(vKey0, vKey0New, vMask);
+                vKey0 = Blend(vKey0, vKey0New, vMask);
 
                 // Update Key1
                 // key1 = key1 + (key0 & 0xff)
@@ -109,27 +106,27 @@ namespace ZCracker
                 Vector256<uint> vKey1New = Avx2.Add(vKey1, vKey0Low);
                 vKey1New = Avx2.Add(Avx2.MultiplyLow(vKey1New, VecKey1Mult), VecOne);
                 
-                vKey1 = Avx.BlendVariable(vKey1, vKey1New, vMask);
+                vKey1 = Blend(vKey1, vKey1New, vMask);
 
                 // Update Key2
                 // key2 = CrcTable[(key2 ^ (key1 >> 24)) & 0xff] ^ (key2 >> 8)
                 Vector256<uint> vKey1Shift = Avx2.ShiftRightLogical(vKey1, 24);
                 vIndex = Avx2.And(Avx2.Xor(vKey2, vKey1Shift), VecCrcMaskFF);
-                vCrcLookup = Avx2.GatherVectorInt32(CrcTable, vIndex, 4);
+                
+                vCrcLookupInt = Avx2.GatherVector256((int*)CrcTable, vIndex.AsInt32(), 4);
+                vCrcLookup = vCrcLookupInt.AsUInt32();
+
                 Vector256<uint> vKey2New = Avx2.Xor(vCrcLookup, Avx2.ShiftRightLogical(vKey2, 8));
                 
-                vKey2 = Avx.BlendVariable(vKey2, vKey2New, vMask);
+                vKey2 = Blend(vKey2, vKey2New, vMask);
             }
 
-            // 2. Process Encrypted Header (12 bytes)
-            // The header is the same for all 8 lanes!
-            // But the DECRYPT output differs because Keys differ.
-            
+            // 2. Process Encrypted Header
             fixed (byte* headerPtr = encryptedHeader)
             {
                 for (int k = 0; k < 12; k++)
                 {
-                    byte c = headerPtr[k]; // Same byte for all
+                    byte c = headerPtr[k]; 
                     Vector256<uint> vC = Vector256.Create((uint)c);
 
                     // Decrypt Byte Logic
@@ -137,46 +134,36 @@ namespace ZCracker
                     Vector256<uint> vTemp = Avx2.Or(vKey2, Vector256.Create(2u));
                     // val = (temp * (temp ^ 1)) >> 8
                     Vector256<uint> vDecrypt = Avx2.ShiftRightLogical(Avx2.MultiplyLow(vTemp, Avx2.Xor(vTemp, VecOne)), 8);
-                    // result = (byte)vDecrypt. We need just low byte.
-                    Vector256<uint> vDecryptedByte = Avx2.And(vDecrypt, VecCrcMaskFF);
                     
-                    // P = C ^ Decrypt
-                    // For update keys we need P.
+                    Vector256<uint> vDecryptedByte = Avx2.And(vDecrypt, VecCrcMaskFF);
                     Vector256<uint> vP = Avx2.Xor(vC, vDecryptedByte);
                     
-                    // Check logic (Only needed at k=11)
                     if (k == 11)
                     {
-                        // Compare vP against crcCheck
+                        // Check crc
                         Vector256<uint> vCheck = Vector256.Create(crcCheck >> 24);
-                        Vector256<uint> vMatch = Avx2.CompareEqual(vP, vCheck); // -1 (0xFF..) if match, 0 if not
+                        Vector256<uint> vMatch = Avx2.CompareEqual(vP, vCheck); 
                         
                         if (!Avx.TestZ(vMatch, vMatch))
                         {
-                            // Found something!
-                            // Extract which lane
                             uint mask = (uint)Avx2.MoveMask(vMatch.AsByte());
-                            // MoveMask returns 32 bits (4 per int32 lane).
-                            // Lane 0: bits 0-3. Lane 1: bits 4-7.
                             for(int lane=0; lane<8; lane++)
                             {
+                                // MoveMask creates 32 bits from 32 bytes.
+                                // Each 32-bit integer is 4 bytes.
+                                // If any byte in the integer is FF, the corresponding bit is 1.
+                                // Since CompareEqual sets all bytes to FF for true, we look at any bit for that lane.
+                                // Lane 0 is bits 0,1,2,3.
                                 if ((mask & (1 << (lane * 4))) != 0) return lane;
                             }
                         }
                         return -1;
                     }
 
-                    // Update Keys with P (which is vC ^ Decrypt)
-                    // Note: In CheckPassword logic: UpdateKeys((byte)(c ^ DecryptByte()))
-                    // So we update with the decrypted byte.
-                    
-                    // Code reused from above (Update Keys logic)
-                    // But here mask is all ones (always active)
-                    
                     // Key0
                     Vector256<uint> vIndex = Avx2.And(Avx2.Xor(vKey0, vP), VecCrcMaskFF);
-                    Vector256<uint> vCrcLookup = Avx2.GatherVectorInt32(CrcTable, vIndex, 4);
-                    vKey0 = Avx2.Xor(vCrcLookup, Avx2.ShiftRightLogical(vKey0, 8));
+                    Vector256<int> vCrcLookupInt = Avx2.GatherVector256((int*)CrcTable, vIndex.AsInt32(), 4);
+                    vKey0 = Avx2.Xor(vCrcLookupInt.AsUInt32(), Avx2.ShiftRightLogical(vKey0, 8));
 
                     // Key1
                     Vector256<uint> vKey0Low = Avx2.And(vKey0, VecCrcMaskFF);
@@ -186,8 +173,8 @@ namespace ZCracker
                     // Key2
                     Vector256<uint> vKey1Shift = Avx2.ShiftRightLogical(vKey1, 24);
                     vIndex = Avx2.And(Avx2.Xor(vKey2, vKey1Shift), VecCrcMaskFF);
-                    vCrcLookup = Avx2.GatherVectorInt32(CrcTable, vIndex, 4);
-                    vKey2 = Avx2.Xor(vCrcLookup, Avx2.ShiftRightLogical(vKey2, 8));
+                    vCrcLookupInt = Avx2.GatherVector256((int*)CrcTable, vIndex.AsInt32(), 4);
+                    vKey2 = Avx2.Xor(vCrcLookupInt.AsUInt32(), Avx2.ShiftRightLogical(vKey2, 8));
                 }
             }
 

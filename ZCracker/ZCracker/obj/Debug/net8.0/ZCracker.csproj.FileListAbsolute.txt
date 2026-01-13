@@ -23,3 +23,12 @@
 /home/anonymous/RiderProjects/ZCracker/ZCracker/obj/Debug/net8.0/ZCracker.pdb
 /home/anonymous/RiderProjects/ZCracker/ZCracker/obj/Debug/net8.0/ZCracker.genruntimeconfig.cache
 /home/anonymous/RiderProjects/ZCracker/ZCracker/obj/Debug/net8.0/ref/ZCracker.dll
+/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/obj/Debug/net8.0/ZCracker.csproj.AssemblyReference.cache
+/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/obj/Debug/net8.0/ZCracker.GeneratedMSBuildEditorConfig.editorconfig
+/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/obj/Debug/net8.0/ZCracker.AssemblyInfoInputs.cache
+/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/obj/Debug/net8.0/ZCracker.AssemblyInfo.cs
+/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/obj/Debug/net8.0/ZCracker.csproj.CoreCompileInputs.cache
+/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/obj/Debug/net8.0/ZCracker.sourcelink.json
+/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/obj/Debug/net8.0/ZCracker.dll
+/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/obj/Debug/net8.0/refint/ZCracker.dll
+/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/obj/Debug/net8.0/ZCracker.pdb
