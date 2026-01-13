@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "/home/anonymous/RiderProjects/ZCracker/ZCracker/ZCracker.csproj": {}
+    "/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/ZCracker.csproj": {}
   },
   "projects": {
-    "/home/anonymous/RiderProjects/ZCracker/ZCracker/ZCracker.csproj": {
+    "/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/ZCracker.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "/home/anonymous/RiderProjects/ZCracker/ZCracker/ZCracker.csproj",
+        "projectUniqueName": "/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/ZCracker.csproj",
         "projectName": "ZCracker",
-        "projectPath": "/home/anonymous/RiderProjects/ZCracker/ZCracker/ZCracker.csproj",
+        "projectPath": "/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/ZCracker.csproj",
         "packagesPath": "/home/anonymous/.nuget/packages/",
-        "outputPath": "/home/anonymous/RiderProjects/ZCracker/ZCracker/obj/",
+        "outputPath": "/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/obj/",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "/home/anonymous/.nuget/NuGet/NuGet.Config"
@@ -42,12 +42,6 @@
       "frameworks": {
         "net8.0": {
           "targetAlias": "net8.0",
-          "dependencies": {
-            "DotNetZip": {
-              "target": "Package",
-              "version": "[1.16.0, )"
-            }
-          },
           "imports": [
             "net461",
             "net462",
@@ -64,7 +58,7 @@
               "privateAssets": "all"
             }
           },
-          "runtimeIdentifierGraphPath": "/usr/share/dotnet/sdk/8.0.404/PortableRuntimeIdentifierGraph.json"
+          "runtimeIdentifierGraphPath": "/home/anonymous/.dotnet/sdk/8.0.406/PortableRuntimeIdentifierGraph.json"
         }
       }
     }
