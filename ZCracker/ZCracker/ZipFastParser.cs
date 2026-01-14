@@ -146,6 +146,7 @@ namespace ZCracker
                         // Data starts after Name + Extra
                         long dataOffset = localHeaderOffset + 30 + localNameLen + localExtraLen;
                         
+                        byte[] encryptionHeader = Array.Empty<byte>();
                         byte[]? aesSalt = null;
                         byte[]? aesVerifier = null;
 
