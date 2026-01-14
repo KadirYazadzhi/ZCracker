@@ -52,7 +52,7 @@ namespace ZCracker
         /// <summary>
         /// Checks a batch of 8 passwords using AVX2.
         /// </summary>
-        public int CheckBatch(byte[] encryptedHeader, uint crcCheck, char** passwords, int* lengths)
+        public int CheckBatch(byte[] encryptedHeader, uint crcCheck, byte** passwords, int* lengths)
         {
             // Initial State
             Vector256<uint> vKey0 = Vector256.Create(305419896u);
@@ -74,7 +74,7 @@ namespace ZCracker
                 {
                     if (i < lengths[lane])
                     {
-                        pChars[lane] = (byte)passwords[lane][i];
+                        pChars[lane] = passwords[lane][i]; // Read directly as byte
                         pActive[lane] = 0xFFFFFFFF; 
                     }
                     else

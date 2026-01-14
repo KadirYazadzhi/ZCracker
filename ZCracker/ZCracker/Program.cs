@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 
 namespace ZCracker
@@ -16,10 +17,10 @@ namespace ZCracker
         private static bool _found = false;
         private static string _foundPassword = string.Empty;
 
-        static void Main(string[] args)
+        static async Task Main(string[] args)
         {
             PrintBanner();
-            Run();
+            await Run();
         }
 
         private static void PrintBanner()
@@ -41,7 +42,7 @@ namespace ZCracker
             Console.ResetColor();
         }
 
-        private static void Run()
+        private static async Task Run()
         {
             Console.Write("Enter the path to the archive file: ");
             string? archivePath = Console.ReadLine()?.Trim('"', ' ');
@@ -81,7 +82,6 @@ namespace ZCracker
                 GpuZipCryptoEngine? gpuEngine = null;
                 try
                 {
-                    // Attempt to init GPU engine
                     gpuEngine = new GpuZipCryptoEngine();
                     if (gpuEngine.IsAvailable)
                     {
@@ -106,14 +106,16 @@ namespace ZCracker
                 }
 
                 Console.WriteLine("--------------------------------------------------");
-                Console.WriteLine($"Mode: {(useGpu ? "GPU Acceleration (Experimental)" : "CPU SIMD (AVX2)")}");
+                Console.WriteLine($"Mode: {(useGpu ? "GPU Acceleration" : "CPU SIMD (AVX2) + Memory Mapped I/O")}");
                 Console.WriteLine($"Threads: {Environment.ProcessorCount}");
                 Console.WriteLine("--------------------------------------------------");
 
                 var stopwatch = Stopwatch.StartNew();
 
                 using (var cts = new CancellationTokenSource())
+                using (var reader = new ZeroAllocFileReader(wordlistPath))
                 {
+                    // Monitor Task
                     var monitorTask = Task.Run(async () =>
                     {
                         while (!cts.Token.IsCancellationRequested && !_found)
@@ -129,18 +131,101 @@ namespace ZCracker
                         }
                     }, cts.Token);
 
+                    // Channel for Producer-Consumer
+                    var channel = Channel.CreateBounded<PasswordBatch>(new BoundedChannelOptions(100) 
+                    {
+                        SingleWriter = true,
+                        SingleReader = false,
+                        FullMode = BoundedChannelFullMode.Wait
+                    });
+
+                    // Producer Task
+                    var producer = Task.Run(() => 
+                    {
+                        try
+                        {
+                            reader.ProduceBatches(channel.Writer, cts.Token);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Producer Error: {ex.Message}");
+                            channel.Writer.Complete(ex);
+                        }
+                    });
+
+                    // Consumer Tasks
+                    int consumersCount = Environment.ProcessorCount;
+                    var consumers = new Task[consumersCount];
+
+                    for (int i = 0; i < consumersCount; i++)
+                    {
+                        consumers[i] = Task.Run(async () => 
+                        {
+                            var simdEngine = new SimdZipCryptoEngine();
+                            
+                            // Allocate unmanaged memory once per thread to avoid stackalloc in async state machine
+                            IntPtr ptrsBuffer = Marshal.AllocHGlobal(8 * IntPtr.Size);
+                            IntPtr lensBuffer = Marshal.AllocHGlobal(8 * sizeof(int));
+                            
+                            try
+                            {
+                                while (await channel.Reader.WaitToReadAsync(cts.Token))
+                                {
+                                    while (channel.Reader.TryRead(out PasswordBatch batch))
+                                    {
+                                        if (_found) break;
+
+                                        unsafe 
+                                        {
+                                            byte** ptrs = (byte**)ptrsBuffer;
+                                            int* lens = (int*)lensBuffer;
+
+                                            // Process the batch (1024 items)
+                                            // Chunk into 8 for SIMD
+                                            for(int j=0; j < batch.Count; j += 8)
+                                            {
+                                                int remaining = Math.Min(8, batch.Count - j);
+                                                
+                                                // Fill SIMD buffers
+                                                for(int k=0; k < remaining; k++)
+                                                {
+                                                    ptrs[k] = (byte*)batch.Pointers[j+k];
+                                                    lens[k] = batch.Lengths[j+k];
+                                                }
+                                                // Fill rest with 0 length if partial batch
+                                                for(int k=remaining; k<8; k++) lens[k] = 0;
+
+                                                int result = simdEngine.CheckBatch(metadata.EncryptionHeader, metadata.Crc32, ptrs, lens);
+                                                
+                                                if (result != -1)
+                                                {
+                                                    // Found!
+                                                    int foundIdx = j + result;
+                                                    var entry = batch.Get(foundIdx);
+                                                    _foundPassword = entry.ToString();
+                                                    _found = true;
+                                                    cts.Cancel();
+                                                    return;
+                                                }
+                                            }
+                                        }
+                                        Interlocked.Add(ref _attempts, batch.Count);
+                                    }
+                                }
+                            }
+                            catch (OperationCanceledException) { }
+                            finally
+                            {
+                                Marshal.FreeHGlobal(ptrsBuffer);
+                                Marshal.FreeHGlobal(lensBuffer);
+                            }
+                        });
+                    }
+
                     try
                     {
-                        if (useGpu && gpuEngine != null)
-                        {
-                            // GPU Mode - Requires Batching
-                            RunGpuMode(wordlistPath, gpuEngine, metadata, cts.Token);
-                        }
-                        else
-                        {
-                            // CPU SIMD Mode
-                            RunCpuSimdMode(wordlistPath, metadata, cts.Token);
-                        }
+                        // Wait for everything
+                        await Task.WhenAny(Task.WhenAll(consumers), Task.Delay(Timeout.Infinite, cts.Token));
                     }
                     catch (OperationCanceledException) { }
                     finally
@@ -171,142 +256,6 @@ namespace ZCracker
             {
                 Console.WriteLine($"\nCritical Error: {ex.Message}");
                 Console.WriteLine(ex.StackTrace);
-            }
-        }
-
-        private static void RunCpuSimdMode(string wordlistPath, TargetFileMetadata metadata, CancellationToken token)
-        {
-             // We need to read lines and chunk them into batches of 8 for SIMD
-             var options = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount, CancellationToken = token };
-
-             // To use Parallel.ForEach effectively with batching, we should partition the source.
-             // But simple ReadLines() with local buffering is easiest.
-             
-             Parallel.ForEach(
-                 File.ReadLines(wordlistPath),
-                 options,
-                 () => new SimdThreadState(), // Thread-local state
-                 (password, loopState, state) =>
-                 {
-                     if (_found) { loopState.Stop(); return state; }
-                     
-                     // Add to buffer
-                     state.Batch[state.Count] = password;
-                     state.Count++;
-
-                     if (state.Count == 8)
-                     {
-                         ProcessBatch(state, metadata);
-                         Interlocked.Add(ref _attempts, 8);
-                         if (_found) loopState.Stop();
-                         state.Count = 0;
-                     }
-                     return state;
-                 },
-                 (state) => 
-                 {
-                     // Process remaining
-                     if (state.Count > 0 && !_found)
-                     {
-                         // Fill rest with empty or handle count
-                         // For simplicity we just process the valid ones (Simd engine handles lengths)
-                         for(int i=state.Count; i<8; i++) state.Batch[i] = "";
-                         ProcessBatch(state, metadata);
-                         Interlocked.Add(ref _attempts, state.Count);
-                     }
-                 } 
-             );
-        }
-
-        private static unsafe void ProcessBatch(SimdThreadState state, TargetFileMetadata metadata)
-        {
-             // Pin strings and create pointers
-             // This is inside the hot path, so we must be careful.
-             // Pinning 8 strings individually is annoying.
-             // But standard GCHandle is okay.
-             
-             fixed(char* p0 = state.Batch[0])
-             fixed(char* p1 = state.Batch[1])
-             fixed(char* p2 = state.Batch[2])
-             fixed(char* p3 = state.Batch[3])
-             fixed(char* p4 = state.Batch[4])
-             fixed(char* p5 = state.Batch[5])
-             fixed(char* p6 = state.Batch[6])
-             fixed(char* p7 = state.Batch[7])
-             {
-                 state.Ptrs[0] = p0; state.Lens[0] = state.Batch[0].Length;
-                 state.Ptrs[1] = p1; state.Lens[1] = state.Batch[1].Length;
-                 state.Ptrs[2] = p2; state.Lens[2] = state.Batch[2].Length;
-                 state.Ptrs[3] = p3; state.Lens[3] = state.Batch[3].Length;
-                 state.Ptrs[4] = p4; state.Lens[4] = state.Batch[4].Length;
-                 state.Ptrs[5] = p5; state.Lens[5] = state.Batch[5].Length;
-                 state.Ptrs[6] = p6; state.Lens[6] = state.Batch[6].Length;
-                 state.Ptrs[7] = p7; state.Lens[7] = state.Batch[7].Length;
-                 
-                 fixed(char** pPtrs = state.Ptrs)
-                 fixed(int* pLens = state.Lens)
-                 {
-                     int foundIndex = state.Engine.CheckBatch(metadata.EncryptionHeader, metadata.Crc32, pPtrs, pLens);
-                     if (foundIndex >= 0)
-                     {
-                         _found = true;
-                         _foundPassword = state.Batch[foundIndex];
-                     }
-                 }
-             }
-        }
-        
-        // Helper class for SIMD state
-        class SimdThreadState
-        {
-            public SimdZipCryptoEngine Engine = new SimdZipCryptoEngine();
-            public string[] Batch = new string[8];
-            public int Count = 0;
-            public unsafe char*[] Ptrs = new char*[8]; // Array on heap, but contents are pointers
-            public int[] Lens = new int[8];
-        }
-
-        private static void RunGpuMode(string wordlistPath, GpuZipCryptoEngine engine, TargetFileMetadata metadata, CancellationToken token)
-        {
-            // GPU requires large chunks.
-            const int ChunkSize = 100000;
-            var buffer = new List<string>(ChunkSize);
-            
-            // Single-threaded read, batched execute (simplest for GPU offload)
-            // Or use a producer-consumer.
-            foreach (var line in File.ReadLines(wordlistPath))
-            {
-                if (token.IsCancellationRequested || _found) break;
-                buffer.Add(line);
-                if (buffer.Count >= ChunkSize)
-                {
-                    ProcessGpuBatch(engine, buffer, metadata);
-                    buffer.Clear();
-                }
-            }
-            if (buffer.Count > 0 && !_found)
-            {
-                ProcessGpuBatch(engine, buffer, metadata);
-            }
-        }
-
-        private static void ProcessGpuBatch(GpuZipCryptoEngine engine, List<string> passwordList, TargetFileMetadata metadata)
-        {
-            // Convert List<string> to byte[][]
-            // This conversion overhead might kill GPU gains if not optimized, but good for demo.
-            byte[][] bytes = new byte[passwordList.Count][];
-            for(int i=0; i<passwordList.Count; i++)
-            {
-                bytes[i] = System.Text.Encoding.ASCII.GetBytes(passwordList[i]);
-            }
-            
-            int foundIdx = engine.CheckBatch(bytes, metadata.EncryptionHeader, metadata.Crc32);
-            Interlocked.Add(ref _attempts, passwordList.Count);
-            
-            if (foundIdx >= 0)
-            {
-                _found = true;
-                _foundPassword = passwordList[foundIdx];
             }
         }
     }

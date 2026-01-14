@@ -32,3 +32,13 @@
 /home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/obj/Debug/net8.0/ZCracker.dll
 /home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/obj/Debug/net8.0/refint/ZCracker.dll
 /home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/obj/Debug/net8.0/ZCracker.pdb
+/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/bin/Debug/net8.0/ZCracker
+/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/bin/Debug/net8.0/ZCracker.deps.json
+/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/bin/Debug/net8.0/ZCracker.runtimeconfig.json
+/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/bin/Debug/net8.0/ZCracker.dll
+/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/bin/Debug/net8.0/ZCracker.pdb
+/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/bin/Debug/net8.0/ILGPU.dll
+/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/bin/Debug/net8.0/ILGPU.Algorithms.dll
+/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/obj/Debug/net8.0/ZCracker.csproj.Up2Date
+/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/obj/Debug/net8.0/ZCracker.genruntimeconfig.cache
+/home/anonymous/Documents/GitHub/ZCracker/ZCracker/ZCracker/obj/Debug/net8.0/ref/ZCracker.dll
