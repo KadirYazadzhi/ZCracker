@@ -74,6 +74,8 @@ namespace ZCracker
                 }
 
                 Console.WriteLine($"Target File: {metadata.FileName}");
+                Console.WriteLine($"Data Offset: {metadata.DataOffset}");
+                Console.WriteLine($"Compressed Size: {metadata.CompressedSize}");
                 Console.WriteLine("--------------------------------------------------");
                 Console.WriteLine("Detecting Hardware Acceleration...");
 
@@ -124,9 +126,8 @@ namespace ZCracker
                             long current = Interlocked.Read(ref _attempts);
                             double seconds = stopwatch.Elapsed.TotalSeconds;
                             double rate = current / seconds;
-                            string rateStr = rate > 1000000 ? $"{rate/1000000:F2} M/s" : $"{rate:N0} p/s";
+                            string rateStr = rate > 1000000 ? "{rate/1000000:F2} M/s" : "{rate:N0} p/s";
                             
-                            Console.Title = $"ZCracker | Speed: {rateStr} | Attempts: {current:N0}";
                             Console.Write($"\rSpeed: {rateStr} | Total: {current:N0} | Time: {stopwatch.Elapsed:mm\\:ss}");
                         }
                     }, cts.Token);
@@ -157,13 +158,18 @@ namespace ZCracker
                     int consumersCount = Environment.ProcessorCount;
                     var consumers = new Task[consumersCount];
 
+                    // Helper for Deep Verification
+                    // We create one scalar engine per thread to reuse logic if needed, 
+                    // or just use ZipVerifier which uses new engine.
+                    
                     for (int i = 0; i < consumersCount; i++)
                     {
                         consumers[i] = Task.Run(async () => 
                         {
                             var simdEngine = new SimdZipCryptoEngine();
+                            var scalarEngine = new ZipCryptoEngine(); // For double-checking matches in batch
                             
-                            // Allocate unmanaged memory once per thread to avoid stackalloc in async state machine
+                            // Allocate unmanaged memory once per thread
                             IntPtr ptrsBuffer = Marshal.AllocHGlobal(8 * IntPtr.Size);
                             IntPtr lensBuffer = Marshal.AllocHGlobal(8 * sizeof(int));
                             
@@ -180,8 +186,6 @@ namespace ZCracker
                                             byte** ptrs = (byte**)ptrsBuffer;
                                             int* lens = (int*)lensBuffer;
 
-                                            // Process the batch (1024 items)
-                                            // Chunk into 8 for SIMD
                                             for(int j=0; j < batch.Count; j += 8)
                                             {
                                                 int remaining = Math.Min(8, batch.Count - j);
@@ -192,20 +196,40 @@ namespace ZCracker
                                                     ptrs[k] = (byte*)batch.Pointers[j+k];
                                                     lens[k] = batch.Lengths[j+k];
                                                 }
-                                                // Fill rest with 0 length if partial batch
+                                                // Fill rest with 0 length
                                                 for(int k=remaining; k<8; k++) lens[k] = 0;
 
+                                                // 1. Fast SIMD Check (Returns index of FIRST match or -1)
                                                 int result = simdEngine.CheckBatch(metadata.EncryptionHeader, metadata.Crc32, ptrs, lens);
                                                 
                                                 if (result != -1)
                                                 {
-                                                    // Found!
-                                                    int foundIdx = j + result;
-                                                    var entry = batch.Get(foundIdx);
-                                                    _foundPassword = entry.ToString();
-                                                    _found = true;
-                                                    cts.Cancel();
-                                                    return;
+                                                    // Potential match found in this group of 8!
+                                                    // But wait, there might be MULTIPLE matches (false positives).
+                                                    // SIMD only told us the first one.
+                                                    // We must Scalar Check ALL 8 to be sure we don't miss the real one
+                                                    // if it's "shadowed" by a false positive earlier in the batch.
+                                                    
+                                                    for(int k=0; k < remaining; k++)
+                                                    {
+                                                        int idx = j + k;
+                                                        var entry = batch.Get(idx);
+                                                        string candidate = entry.ToString();
+                                                        
+                                                        // Fast Scalar Check (Header Only)
+                                                        if (scalarEngine.CheckPassword(metadata.EncryptionHeader, metadata.Crc32, candidate))
+                                                        {
+                                                            // Header Matches! Now Deep Verify.
+                                                            if (ZipVerifier.Verify(candidate, archivePath, metadata))
+                                                            {
+                                                                _foundPassword = candidate;
+                                                                _found = true;
+                                                                cts.Cancel();
+                                                                return;
+                                                            }
+                                                            // Else: False Positive, ignore and continue
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -224,7 +248,6 @@ namespace ZCracker
 
                     try
                     {
-                        // Wait for everything
                         await Task.WhenAny(Task.WhenAll(consumers), Task.Delay(Timeout.Infinite, cts.Token));
                     }
                     catch (OperationCanceledException) { }

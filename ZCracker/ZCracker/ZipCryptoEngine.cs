@@ -43,6 +43,30 @@ namespace ZCracker
             Reset();
         }
 
+        /// <summary>
+        /// Decrypts a buffer in place.
+        /// </summary>
+        public void DecryptBuffer(byte[] buffer, int length)
+        {
+            // Decrypt byte by byte
+            for (int i = 0; i < length; i++)
+            {
+                byte c = buffer[i];
+                byte p = (byte)(c ^ DecryptByte());
+                UpdateKeys(p);
+                buffer[i] = p;
+            }
+        }
+
+        public void InitKeys(string password)
+        {
+            Reset();
+            foreach (char c in password)
+            {
+                UpdateKeys((byte)c);
+            }
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void Reset()
         {
