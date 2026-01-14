@@ -6,22 +6,25 @@ namespace ZCracker
 {
     public readonly record struct TargetFileMetadata(
         byte[] EncryptionHeader,
-        uint HeaderVerifier, // For Fast Check (12th byte)
-        uint RealCrc32,      // For Deep Verify
+        uint HeaderVerifier, 
+        uint RealCrc32,      
         bool IsEncrypted,
         bool IsSupported,
         string FileName,
         long DataOffset,
-        long CompressedSize
+        long CompressedSize,
+        long FileLength // Debug info
     );
 
     public static class ZipFastParser
     {
         private const uint LocalFileHeaderSignature = 0x04034b50;
-        private const uint DataDescriptorSignature = 0x08074b50;
+        private const uint DataDescriptorSignature = 0x08074b50; // 50 4b 07 08
 
         public static TargetFileMetadata Parse(string filePath)
         {
+            long fileLength = new FileInfo(filePath).Length;
+
             using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
             using (var br = new BinaryReader(fs))
             {
@@ -30,7 +33,7 @@ namespace ZCracker
                     uint signature = br.ReadUInt32();
                     if (signature != LocalFileHeaderSignature)
                     {
-                        throw new InvalidDataException("Could not find Local File Header signature at expected location.");
+                        throw new InvalidDataException("Could not find Local File Header signature.");
                     }
 
                     fs.Seek(2, SeekOrigin.Current); // Version
@@ -63,69 +66,82 @@ namespace ZCracker
                     {
                         byte[] encryptionHeader = br.ReadBytes(12);
 
-                        // 1. Determine Header Verifier (High byte of CRC or LastModTime)
-                        // If bit 3 is set, CRC in header is invalid (0), so we use LastModTime for verification.
                         uint headerVerifier = crc32;
                         if (hasDataDescriptor)
                         {
                             headerVerifier = (uint)(lastModTime << 16);
                         }
 
-                        // 2. Determine Real CRC32
                         uint realCrc32 = crc32;
                         long actualCompressedSize = compressedSize;
 
+                        // If bit 3 is set, CRC is usually 0 in header. We need to find Data Descriptor.
                         if (hasDataDescriptor)
                         {
-                            // If bit 3 is set, the CRC32 in the header is NOT valid (it's 0).
-                            // We MUST read it from the Data Descriptor (after the compressed data).
-                            // Note: actualCompressedSize from header might be correct (if updated) or 0.
-                            // The user log shows CompressedSize: 33, so it IS present.
-
-                            if (actualCompressedSize > 0)
+                            // Heuristic Scan for Data Descriptor Signature (0x08074b50)
+                            // We scan starting from where we think data ends (or just after header to be safe)
+                            // Scan window: From currentPos + 12 (min compressed data 0?) to End of File.
+                            
+                            // Safe seek bypassing BinaryReader
+                            long scanStart = currentPos;
+                            if (actualCompressedSize > 0) 
                             {
-                                // IMPORTANT: BinaryReader buffers data. Mixing fs.Seek and br.Read breaks things.
-                                // We must seek on fs, then use a NEW reader or read raw bytes.
-                                
-                                long descriptorPos = currentPos + actualCompressedSize;
-                                
-                                // Save position just in case
-                                long savedPos = fs.Position;
-                                fs.Seek(descriptorPos, SeekOrigin.Begin);
+                                scanStart += actualCompressedSize; // Optimization: Jump to expected end
+                                if (scanStart > fs.Length) scanStart = currentPos; // Safety
+                            }
+                            
+                            long savedPos = fs.Position;
+                            fs.Seek(scanStart, SeekOrigin.Begin);
+                            
+                            // Scan forward 4KB or until EOF looking for signature
+                            // We assume it's near the expected end.
+                            
+                            byte[] buffer = new byte[4096];
+                            int bytesRead;
+                            bool found = false;
+                            
+                            // To be robust, let's scan a bit BEFORE expected end too, in case size excluded header
+                            if (actualCompressedSize > 0 && scanStart > 20)
+                            {
+                                fs.Seek(Math.Max(currentPos, scanStart - 20), SeekOrigin.Begin);
+                            }
 
-                                byte[] buffer = new byte[8];
-                                int bytesRead = fs.Read(buffer, 0, 8);
-                                
-                                if (bytesRead >= 4)
+                            while ((bytesRead = fs.Read(buffer, 0, buffer.Length)) > 0 && !found)
+                            {
+                                for (int i = 0; i < bytesRead - 4; i++)
                                 {
-                                    // Data Descriptor format: 
-                                    // [Signature 4 bytes (optional)] [CRC32 4 bytes] [CompSize 4] [UncompSize 4]
-                                    
-                                    uint val1 = BitConverter.ToUInt32(buffer, 0);
-                                    
-                                    if (val1 == DataDescriptorSignature)
+                                    // Check for 0x08074b50 (Little Endian: 50 4b 07 08)
+                                    if (buffer[i] == 0x50 && buffer[i+1] == 0x4b && buffer[i+2] == 0x07 && buffer[i+3] == 0x08)
                                     {
-                                        // Signature present, next 4 bytes are CRC
-                                        if (bytesRead >= 8)
+                                        // Found signature!
+                                        // Next 4 bytes are CRC32
+                                        int crcOffset = i + 4;
+                                        if (crcOffset + 4 <= bytesRead)
                                         {
-                                            realCrc32 = BitConverter.ToUInt32(buffer, 4);
+                                            realCrc32 = BitConverter.ToUInt32(buffer, crcOffset);
+                                            found = true;
+                                            
+                                            // Also update Compressed Size if it was 0
+                                            // Note: calculating exact compressed size here is tricky without uncomp size check
+                                            // but for verification we trust the Header size if present, 
+                                            // or we need to calculate it: (FoundPos - currentPos).
+                                            
+                                            long foundPos = fs.Position - bytesRead + i;
+                                            long calculatedSize = foundPos - currentPos;
+                                            if (actualCompressedSize == 0 || Math.Abs(calculatedSize - actualCompressedSize) < 20)
+                                            {
+                                                actualCompressedSize = calculatedSize;
+                                            }
                                         }
-                                    }
-                                    else
-                                    {
-                                        // No signature, val1 IS the CRC
-                                        realCrc32 = val1;
+                                        break;
                                     }
                                 }
-                                
-                                // Restore if we were iterating (not needed here since we return)
-                                // fs.Seek(savedPos, SeekOrigin.Begin);
+                                if (fs.Position > currentPos + actualCompressedSize + 4096 + 100000) break; // Don't scan forever if file is huge
                             }
+                            
+                            fs.Seek(savedPos, SeekOrigin.Begin);
                         }
 
-                        // Sanity Check: If realCrc32 is still 0, warn the user?
-                        // But 0 is technically a valid CRC (rare).
-                        
                         return new TargetFileMetadata(
                             EncryptionHeader: encryptionHeader,
                             HeaderVerifier: headerVerifier,
@@ -134,7 +150,8 @@ namespace ZCracker
                             IsSupported: compressionMethod == 0 || compressionMethod == 8,
                             FileName: fileName,
                             DataOffset: currentPos,
-                            CompressedSize: actualCompressedSize
+                            CompressedSize: actualCompressedSize,
+                            FileLength: fileLength
                         );
                     }
                 }
