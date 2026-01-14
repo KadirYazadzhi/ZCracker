@@ -76,6 +76,7 @@ namespace ZCracker
                 Console.WriteLine($"Target File: {metadata.FileName}");
                 Console.WriteLine($"Data Offset: {metadata.DataOffset}");
                 Console.WriteLine($"Compressed Size: {metadata.CompressedSize}");
+                Console.WriteLine($"Real CRC32: {metadata.RealCrc32:X8}");
                 Console.WriteLine("--------------------------------------------------");
                 Console.WriteLine("Detecting Hardware Acceleration...");
 
@@ -126,9 +127,11 @@ namespace ZCracker
                             long current = Interlocked.Read(ref _attempts);
                             double seconds = stopwatch.Elapsed.TotalSeconds;
                             double rate = current / seconds;
+                            // Fixed string interpolation logic
                             string rateStr = rate > 1000000 ? "{rate/1000000:F2} M/s" : "{rate:N0} p/s";
                             
-                            Console.Write($"\rSpeed: {rateStr} | Total: {current:N0} | Time: {stopwatch.Elapsed:mm\\:ss}");
+                            Console.Title = $"ZCracker | Speed: {rateStr} | Attempts: {current:N0}";
+                            Console.Write($"\rSpeed: {rateStr} | Total: {current:N0} | Time: {stopwatch.Elapsed:hh\\:mm\\:ss}");
                         }
                     }, cts.Token);
 
@@ -158,18 +161,13 @@ namespace ZCracker
                     int consumersCount = Environment.ProcessorCount;
                     var consumers = new Task[consumersCount];
 
-                    // Helper for Deep Verification
-                    // We create one scalar engine per thread to reuse logic if needed, 
-                    // or just use ZipVerifier which uses new engine.
-                    
                     for (int i = 0; i < consumersCount; i++)
                     {
                         consumers[i] = Task.Run(async () => 
                         {
                             var simdEngine = new SimdZipCryptoEngine();
-                            var scalarEngine = new ZipCryptoEngine(); // For double-checking matches in batch
+                            var scalarEngine = new ZipCryptoEngine(); 
                             
-                            // Allocate unmanaged memory once per thread
                             IntPtr ptrsBuffer = Marshal.AllocHGlobal(8 * IntPtr.Size);
                             IntPtr lensBuffer = Marshal.AllocHGlobal(8 * sizeof(int));
                             
@@ -190,36 +188,29 @@ namespace ZCracker
                                             {
                                                 int remaining = Math.Min(8, batch.Count - j);
                                                 
-                                                // Fill SIMD buffers
                                                 for(int k=0; k < remaining; k++)
                                                 {
                                                     ptrs[k] = (byte*)batch.Pointers[j+k];
                                                     lens[k] = batch.Lengths[j+k];
                                                 }
-                                                // Fill rest with 0 length
                                                 for(int k=remaining; k<8; k++) lens[k] = 0;
 
-                                                // 1. Fast SIMD Check (Returns index of FIRST match or -1)
-                                                int result = simdEngine.CheckBatch(metadata.EncryptionHeader, metadata.Crc32, ptrs, lens);
+                                                // Pass HeaderVerifier (the fast check value)
+                                                int result = simdEngine.CheckBatch(metadata.EncryptionHeader, metadata.HeaderVerifier, ptrs, lens);
                                                 
                                                 if (result != -1)
                                                 {
-                                                    // Potential match found in this group of 8!
-                                                    // But wait, there might be MULTIPLE matches (false positives).
-                                                    // SIMD only told us the first one.
-                                                    // We must Scalar Check ALL 8 to be sure we don't miss the real one
-                                                    // if it's "shadowed" by a false positive earlier in the batch.
-                                                    
+                                                    // Scalar Check ALL matches in this batch (False positive elimination)
                                                     for(int k=0; k < remaining; k++)
                                                     {
                                                         int idx = j + k;
                                                         var entry = batch.Get(idx);
                                                         string candidate = entry.ToString();
                                                         
-                                                        // Fast Scalar Check (Header Only)
-                                                        if (scalarEngine.CheckPassword(metadata.EncryptionHeader, metadata.Crc32, candidate))
+                                                        // Fast Scalar Check with HeaderVerifier
+                                                        if (scalarEngine.CheckPassword(metadata.EncryptionHeader, metadata.HeaderVerifier, candidate))
                                                         {
-                                                            // Header Matches! Now Deep Verify.
+                                                            // Deep Verify with Real CRC32
                                                             if (ZipVerifier.Verify(candidate, archivePath, metadata))
                                                             {
                                                                 _foundPassword = candidate;
@@ -227,7 +218,6 @@ namespace ZCracker
                                                                 cts.Cancel();
                                                                 return;
                                                             }
-                                                            // Else: False Positive, ignore and continue
                                                         }
                                                     }
                                                 }

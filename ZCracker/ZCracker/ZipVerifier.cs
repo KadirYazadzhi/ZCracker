@@ -9,49 +9,31 @@ namespace ZCracker
         {
             try
             {
-                // 1. Read the encrypted data (Header + Compressed Data)
-                // We need to read 'CompressedSize' bytes starting from 'DataOffset'.
-                // Note: CompressedSize in ZIP usually *includes* the 12-byte header for encrypted files?
-                // Actually, standard ZIP spec says Compressed Size is the size of the *compressed data stream*.
-                // For encrypted files, the 12-byte header is prepended to the data.
-                // So we likely need to read 12 + CompressedSize? Or is CompressedSize inclusive?
-                // Usually tools treat CompressedSize as the size on disk. So it includes the 12 bytes.
-                // We will assume CompressedSize is total bytes to read.
-                
+                if (metadata.CompressedSize > int.MaxValue) return false;
+
                 byte[] fileData;
                 using (var fs = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.Read))
                 {
                     fs.Seek(metadata.DataOffset, SeekOrigin.Begin);
-                    // Limit read to avoid memory explosion if file is huge.
-                    // If file is > 100MB, maybe we stream?
-                    // For now, assume < 2GB and just read.
-                    if (metadata.CompressedSize > int.MaxValue) return false; // Too big for this simple verify
-                    
                     fileData = new byte[metadata.CompressedSize];
                     fs.ReadExactly(fileData, 0, (int)metadata.CompressedSize);
                 }
 
-                // 2. Initialize Engine
                 var engine = new ZipCryptoEngine();
                 engine.InitKeys(password);
 
-                // 3. Decrypt the whole buffer
+                // Decrypt
                 engine.DecryptBuffer(fileData, fileData.Length);
 
-                // 4. Verify Header (Again, just to be sure)
-                // The first 12 bytes are the header.
-                // The 12th byte (index 11) must match high byte of CRC.
-                // But wait, DecryptBuffer modifies in place.
-                // So fileData[11] is the decrypted verification byte.
-                
-                byte checkByte = (byte)((metadata.Crc32 >> 24) & 0xFF);
-                if (fileData[11] != checkByte) return false; // Should not happen if FastCheck passed, but good sanity check.
+                // Verify Header byte (sanity check)
+                byte checkByte = (byte)((metadata.HeaderVerifier >> 24) & 0xFF);
+                if (fileData[11] != checkByte) return false; 
 
-                // 5. Calculate CRC32 of the *Payload* (bytes 12 onwards)
-                // We need a CRC32 calculator.
+                // Verify Content CRC
+                // Calculate CRC32 of the *Payload* (bytes 12 onwards)
                 uint calculatedCrc = Crc32Calculator.Compute(fileData, 12, fileData.Length - 12);
 
-                return calculatedCrc == metadata.Crc32;
+                return calculatedCrc == metadata.RealCrc32;
             }
             catch
             {

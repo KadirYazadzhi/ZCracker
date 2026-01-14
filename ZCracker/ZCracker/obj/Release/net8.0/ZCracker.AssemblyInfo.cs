@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("ZCracker")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+9267d88410eab80a07403049768822bf8d0f1ffd")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+9ddf5db3f15f10437bcce2c51764d3fb1e961396")]
 [assembly: System.Reflection.AssemblyProductAttribute("ZCracker")]
 [assembly: System.Reflection.AssemblyTitleAttribute("ZCracker")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
