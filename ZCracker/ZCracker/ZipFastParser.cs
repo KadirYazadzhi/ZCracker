@@ -13,7 +13,12 @@ namespace ZCracker
         string FileName,
         long DataOffset,
         long CompressedSize,
-        long FileLength
+        long UncompressedSize,
+        long FileLength,
+        ushort CompressionMethod,
+        byte[]? AesSalt,       // Added
+        byte[]? AesVerifier,   // Added
+        int KeyStrengthInBits  // Added (128, 192, 256)
     );
 
     public static class ZipFastParser
@@ -136,7 +141,9 @@ namespace ZCracker
                             FileName: fileName,
                             DataOffset: dataOffset, // Points to the 12-byte header
                             CompressedSize: compressedSize,
-                            FileLength: fileLength
+                            UncompressedSize: uncompressedSize,
+                            FileLength: fileLength,
+                            CompressionMethod: compressionMethod
                         );
                     }
                 }
