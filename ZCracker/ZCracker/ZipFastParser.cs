@@ -109,17 +109,72 @@ namespace ZCracker
                         ushort localNameLen = br.ReadUInt16();
                         ushort localExtraLen = br.ReadUInt16();
                         
+                        // Parse Local Extra Fields to find AES Info (0x9901)
+                        int keyStrength = 0;
+                        if (compressionMethod == 99)
+                        {
+                            long extraPos = fs.Position + localNameLen;
+                            fs.Seek(extraPos, SeekOrigin.Begin);
+                            byte[] extra = br.ReadBytes(localExtraLen);
+                            
+                            for (int i = 0; i < extra.Length - 4; )
+                            {
+                                ushort headerId = BitConverter.ToUInt16(extra, i);
+                                ushort dataSize = BitConverter.ToUInt16(extra, i + 2);
+                                
+                                if (headerId == 0x9901 && dataSize >= 7)
+                                {
+                                    // AES Extra Data found
+                                    // Offset 4: Version (2 bytes)
+                                    // Offset 6: Vendor (2 bytes)
+                                    // Offset 8: Strength (1 byte) -> 1=128, 2=192, 3=256
+                                    // Offset 9: Method (2 bytes)
+                                    byte strength = extra[i + 8];
+                                    keyStrength = strength switch
+                                    {
+                                        1 => 128,
+                                        2 => 192,
+                                        3 => 256,
+                                        _ => 256 // Default/Fallback
+                                    };
+                                    break; 
+                                }
+                                i += 4 + dataSize;
+                            }
+                        }
+
                         // Data starts after Name + Extra
                         long dataOffset = localHeaderOffset + 30 + localNameLen + localExtraLen;
                         
-                        // Read the Encryption Header (12 bytes) from the data stream
-                        fs.Seek(dataOffset, SeekOrigin.Begin);
-                        byte[] encryptionHeader = br.ReadBytes(12);
+                        byte[]? aesSalt = null;
+                        byte[]? aesVerifier = null;
+
+                        if (compressionMethod == 99)
+                        {
+                            // AES Layout: [Salt] [Verifier 2b] [Encrypted Data] [Auth Code 10b]
+                            int saltLen = keyStrength / 8 / 2; // 128->8, 192->12, 256->16
+                            if (saltLen == 0) saltLen = 16; // Safety
+
+                            fs.Seek(dataOffset, SeekOrigin.Begin);
+                            aesSalt = br.ReadBytes(saltLen);
+                            aesVerifier = br.ReadBytes(2);
+                            
+                            // Adjust DataOffset to point to actual Deflate stream
+                            dataOffset += saltLen + 2;
+                            // CompressedSize includes Salt + Verifier + AuthCode(10). 
+                            // Verify logic might need payload size.
+                        }
+                        else
+                        {
+                            // Read the Encryption Header (12 bytes) from the data stream for Legacy ZipCrypto
+                            fs.Seek(dataOffset, SeekOrigin.Begin);
+                            encryptionHeader = br.ReadBytes(12);
+                        }
 
                         // Header Verifier Logic
                         uint headerVerifier = crc32;
                         bool hasDataDescriptor = (bitFlag & 8) != 0;
-                        if (hasDataDescriptor)
+                        if (hasDataDescriptor && compressionMethod != 99)
                         {
                             headerVerifier = (uint)(lastModTime << 16);
                         }
@@ -137,13 +192,16 @@ namespace ZCracker
                             HeaderVerifier: headerVerifier,
                             RealCrc32: crc32, // TRUST THE CENTRAL DIRECTORY CRC!
                             IsEncrypted: isEncrypted,
-                            IsSupported: compressionMethod == 0 || compressionMethod == 8,
+                            IsSupported: compressionMethod == 0 || compressionMethod == 8 || compressionMethod == 99,
                             FileName: fileName,
                             DataOffset: dataOffset, // Points to the 12-byte header
                             CompressedSize: compressedSize,
                             UncompressedSize: uncompressedSize,
                             FileLength: fileLength,
-                            CompressionMethod: compressionMethod
+                            CompressionMethod: compressionMethod,
+                            AesSalt: aesSalt,
+                            AesVerifier: aesVerifier,
+                            KeyStrengthInBits: keyStrength
                         );
                     }
                 }
