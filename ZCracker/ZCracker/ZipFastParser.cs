@@ -64,6 +64,7 @@ namespace ZCracker
                         byte[] encryptionHeader = br.ReadBytes(12);
 
                         // 1. Determine Header Verifier (High byte of CRC or LastModTime)
+                        // If bit 3 is set, CRC in header is invalid (0), so we use LastModTime for verification.
                         uint headerVerifier = crc32;
                         if (hasDataDescriptor)
                         {
@@ -76,55 +77,55 @@ namespace ZCracker
 
                         if (hasDataDescriptor)
                         {
-                            // CRC32 is not in header. We must find it in Data Descriptor.
-                            // But wait, if hasDataDescriptor is set, CompressedSize in header MIGHT be 0 too!
-                            // If CompressedSize is 0, we can't easily skip data to find the descriptor without parsing the stream (Deflate).
-                            // This is a known issue with streaming ZIPs.
-                            
-                            // However, most archivers (like Info-ZIP on Linux) DO write the size in local header 
-                            // if they can seek back, OR they write it in Central Directory.
-                            // If CompressedSize is 0, we MUST look at Central Directory.
-                            
-                            if (compressedSize == 0)
-                            {
-                                // Fallback: Scan Central Directory (End of file)
-                                // For simplicity/speed in this context, we'll try to guess or throw.
-                                // But let's check if the user's file likely has size. 
-                                // User log showed: Compressed Size: 33. So size IS present.
-                                // If size is present, we can jump to descriptor.
-                                
-                                // Note: Using Central Directory is the robust way.
-                                // Let's quickly implement a CD scanner if needed? 
-                                // No, let's assume if size > 0 we use it.
-                            }
+                            // If bit 3 is set, the CRC32 in the header is NOT valid (it's 0).
+                            // We MUST read it from the Data Descriptor (after the compressed data).
+                            // Note: actualCompressedSize from header might be correct (if updated) or 0.
+                            // The user log shows CompressedSize: 33, so it IS present.
 
                             if (actualCompressedSize > 0)
                             {
+                                // IMPORTANT: BinaryReader buffers data. Mixing fs.Seek and br.Read breaks things.
+                                // We must seek on fs, then use a NEW reader or read raw bytes.
+                                
+                                long descriptorPos = currentPos + actualCompressedSize;
+                                
+                                // Save position just in case
                                 long savedPos = fs.Position;
-                                // Jump to end of compressed data
-                                // Data starts at currentPos (start of 12 byte header).
-                                // CompressedSize includes the 12 bytes usually? 
-                                // Wait, earlier I assumed DataOffset points to 12 bytes.
-                                // If CompressedSize = 33, and header is 12, then actual data is 21.
-                                // The Data Descriptor follows the *compressed data*.
+                                fs.Seek(descriptorPos, SeekOrigin.Begin);
+
+                                byte[] buffer = new byte[8];
+                                int bytesRead = fs.Read(buffer, 0, 8);
                                 
-                                fs.Seek(currentPos + actualCompressedSize, SeekOrigin.Begin);
+                                if (bytesRead >= 4)
+                                {
+                                    // Data Descriptor format: 
+                                    // [Signature 4 bytes (optional)] [CRC32 4 bytes] [CompSize 4] [UncompSize 4]
+                                    
+                                    uint val1 = BitConverter.ToUInt32(buffer, 0);
+                                    
+                                    if (val1 == DataDescriptorSignature)
+                                    {
+                                        // Signature present, next 4 bytes are CRC
+                                        if (bytesRead >= 8)
+                                        {
+                                            realCrc32 = BitConverter.ToUInt32(buffer, 4);
+                                        }
+                                    }
+                                    else
+                                    {
+                                        // No signature, val1 IS the CRC
+                                        realCrc32 = val1;
+                                    }
+                                }
                                 
-                                // Try to read signature
-                                uint possibleSig = br.ReadUInt32();
-                                if (possibleSig == DataDescriptorSignature)
-                                {
-                                    realCrc32 = br.ReadUInt32();
-                                }
-                                else
-                                {
-                                    // Signature is optional. This might be the CRC.
-                                    realCrc32 = possibleSig;
-                                }
-                                fs.Seek(savedPos, SeekOrigin.Begin);
+                                // Restore if we were iterating (not needed here since we return)
+                                // fs.Seek(savedPos, SeekOrigin.Begin);
                             }
                         }
 
+                        // Sanity Check: If realCrc32 is still 0, warn the user?
+                        // But 0 is technically a valid CRC (rare).
+                        
                         return new TargetFileMetadata(
                             EncryptionHeader: encryptionHeader,
                             HeaderVerifier: headerVerifier,
