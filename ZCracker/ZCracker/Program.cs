@@ -74,168 +74,206 @@ namespace ZCracker
                 }
 
                 Console.WriteLine($"Target File: {metadata.FileName}");
+                Console.WriteLine($"Compression Method: {metadata.CompressionMethod} ({(metadata.CompressionMethod == 8 ? "Deflate" : "Store")})");
                 Console.WriteLine($"Data Offset: {metadata.DataOffset}");
                 Console.WriteLine($"Compressed Size: {metadata.CompressedSize}");
+                Console.WriteLine($"Uncompressed Size: {metadata.UncompressedSize}");
                 Console.WriteLine($"Real CRC32: {metadata.RealCrc32:X8}");
-                Console.WriteLine("--------------------------------------------------");
-                Console.WriteLine("Detecting Hardware Acceleration...");
-
-                // Detect GPU
-                bool useGpu = false;
-                GpuZipCryptoEngine? gpuEngine = null;
-                try
-                {
-                    gpuEngine = new GpuZipCryptoEngine();
-                    if (gpuEngine.IsAvailable)
-                    {
-                        Console.ForegroundColor = ConsoleColor.Cyan;
-                        Console.WriteLine($"[+] GPU Detected: {gpuEngine.DeviceName}");
-                        Console.ResetColor();
-                        Console.Write("Do you want to use GPU Acceleration? (y/n) [default: n]: ");
-                        var response = Console.ReadLine();
-                        if (response?.ToLower().StartsWith("y") == true)
-                        {
-                            useGpu = true;
-                        }
-                    }
-                    else
-                    {
-                        Console.WriteLine("[-] No compatible GPU detected (CUDA/OpenCL).");
-                    }
-                }
-                catch
-                {
-                    Console.WriteLine("[-] GPU Initialization failed.");
-                }
-
-                Console.WriteLine("--------------------------------------------------");
-                Console.WriteLine($"Mode: {(useGpu ? "GPU Acceleration" : "CPU SIMD (AVX2) + Memory Mapped I/O")}");
-                Console.WriteLine($"Threads: {Environment.ProcessorCount}");
-                Console.WriteLine("--------------------------------------------------");
-
-                var stopwatch = Stopwatch.StartNew();
-
-                using (var cts = new CancellationTokenSource())
-                using (var reader = new ZeroAllocFileReader(wordlistPath))
-                {
-                    // Monitor Task
-                    var monitorTask = Task.Run(async () =>
-                    {
-                        while (!cts.Token.IsCancellationRequested && !_found)
-                        {
-                            await Task.Delay(1000);
-                            long current = Interlocked.Read(ref _attempts);
-                            double seconds = stopwatch.Elapsed.TotalSeconds;
-                            double rate = current / seconds;
-                            // Fixed string interpolation logic
-                            string rateStr = rate > 1000000 ? "{rate/1000000:F2} M/s" : "{rate:N0} p/s";
-                            
-                            Console.Title = $"ZCracker | Speed: {rateStr} | Attempts: {current:N0}";
-                            Console.Write($"\rSpeed: {rateStr} | Total: {current:N0} | Time: {stopwatch.Elapsed:hh\\:mm\\:ss}");
-                        }
-                    }, cts.Token);
-
-                    // Channel for Producer-Consumer
-                    var channel = Channel.CreateBounded<PasswordBatch>(new BoundedChannelOptions(100) 
-                    {
-                        SingleWriter = true,
-                        SingleReader = false,
-                        FullMode = BoundedChannelFullMode.Wait
-                    });
-
-                    // Producer Task
-                    var producer = Task.Run(() => 
-                    {
-                        try
-                        {
-                            reader.ProduceBatches(channel.Writer, cts.Token);
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"Producer Error: {ex.Message}");
-                            channel.Writer.Complete(ex);
-                        }
-                    });
-
-                    // Consumer Tasks
-                    int consumersCount = Environment.ProcessorCount;
-                    var consumers = new Task[consumersCount];
-
-                    for (int i = 0; i < consumersCount; i++)
-                    {
-                        consumers[i] = Task.Run(async () => 
-                        {
-                            var simdEngine = new SimdZipCryptoEngine();
-                            var scalarEngine = new ZipCryptoEngine(); 
-                            
-                            IntPtr ptrsBuffer = Marshal.AllocHGlobal(8 * IntPtr.Size);
-                            IntPtr lensBuffer = Marshal.AllocHGlobal(8 * sizeof(int));
-                            
-                            try
-                            {
-                                while (await channel.Reader.WaitToReadAsync(cts.Token))
-                                {
-                                    while (channel.Reader.TryRead(out PasswordBatch batch))
-                                    {
-                                        if (_found) break;
-
-                                        unsafe 
-                                        {
-                                            byte** ptrs = (byte**)ptrsBuffer;
-                                            int* lens = (int*)lensBuffer;
-
-                                            for(int j=0; j < batch.Count; j += 8)
-                                            {
-                                                int remaining = Math.Min(8, batch.Count - j);
-                                                
-                                                for(int k=0; k < remaining; k++)
+                                                Console.WriteLine($"Header Verifier: {metadata.HeaderVerifier:X8}");
+                                                Console.WriteLine("--------------------------------------------------");
+                                
+                                                Console.WriteLine("Detecting Hardware Acceleration...");
+                                
+                                                // Detect GPU
+                                                bool useGpu = false;
+                                                GpuZipCryptoEngine? gpuEngine = null;
+                                                if (metadata.CompressionMethod != 99) // GPU only supports Legacy ZipCrypto for now
                                                 {
-                                                    ptrs[k] = (byte*)batch.Pointers[j+k];
-                                                    lens[k] = batch.Lengths[j+k];
-                                                }
-                                                for(int k=remaining; k<8; k++) lens[k] = 0;
-
-                                                // Pass HeaderVerifier (the fast check value)
-                                                int result = simdEngine.CheckBatch(metadata.EncryptionHeader, metadata.HeaderVerifier, ptrs, lens);
-                                                
-                                                if (result != -1)
-                                                {
-                                                    // Scalar Check ALL matches in this batch (False positive elimination)
-                                                    for(int k=0; k < remaining; k++)
+                                                    try
                                                     {
-                                                        int idx = j + k;
-                                                        var entry = batch.Get(idx);
-                                                        string candidate = entry.ToString();
-                                                        
-                                                        // Fast Scalar Check with HeaderVerifier
-                                                        if (scalarEngine.CheckPassword(metadata.EncryptionHeader, metadata.HeaderVerifier, candidate))
+                                                        gpuEngine = new GpuZipCryptoEngine();
+                                                        if (gpuEngine.IsAvailable)
                                                         {
-                                                            // Deep Verify with Real CRC32
-                                                            if (ZipVerifier.Verify(candidate, archivePath, metadata))
+                                                            Console.ForegroundColor = ConsoleColor.Cyan;
+                                                            Console.WriteLine($"[+] GPU Detected: {gpuEngine.DeviceName}");
+                                                            Console.ResetColor();
+                                                            Console.Write("Do you want to use GPU Acceleration? (y/n) [default: n]: ");
+                                                            var response = Console.ReadLine();
+                                                            if (response?.ToLower().StartsWith("y") == true)
                                                             {
-                                                                _foundPassword = candidate;
-                                                                _found = true;
-                                                                cts.Cancel();
-                                                                return;
+                                                                useGpu = true;
                                                             }
                                                         }
+                                                        else
+                                                        {
+                                                            Console.WriteLine("[-] No compatible GPU detected (CUDA/OpenCL).");
+                                                        }
+                                                    }
+                                                    catch
+                                                    {
+                                                        Console.WriteLine("[-] GPU Initialization failed.");
                                                     }
                                                 }
-                                            }
-                                        }
-                                        Interlocked.Add(ref _attempts, batch.Count);
-                                    }
-                                }
-                            }
-                            catch (OperationCanceledException) { }
-                            finally
-                            {
-                                Marshal.FreeHGlobal(ptrsBuffer);
-                                Marshal.FreeHGlobal(lensBuffer);
-                            }
-                        });
-                    }
-
+                                                else
+                                                {
+                                                    Console.WriteLine("[-] GPU Acceleration not supported for AES (CPU Only).");
+                                                }
+                                
+                                                Console.WriteLine("--------------------------------------------------");
+                                                Console.WriteLine($"Mode: {(useGpu ? "GPU Acceleration" : (metadata.CompressionMethod == 99 ? "CPU (AES-PBKDF2)" : "CPU SIMD (AVX2) + Memory Mapped I/O"))}");
+                                                Console.WriteLine($"Threads: {Environment.ProcessorCount}");
+                                                Console.WriteLine("--------------------------------------------------");
+                                
+                                                var stopwatch = Stopwatch.StartNew();
+                                
+                                                using (var cts = new CancellationTokenSource())
+                                                using (var reader = new ZeroAllocFileReader(wordlistPath))
+                                                {
+                                                    // Monitor Task
+                                                    var monitorTask = Task.Run(async () =>
+                                                    {
+                                                        while (!cts.Token.IsCancellationRequested && !_found)
+                                                        {
+                                                            await Task.Delay(1000);
+                                                            long current = Interlocked.Read(ref _attempts);
+                                                            double seconds = stopwatch.Elapsed.TotalSeconds;
+                                                            double rate = current / seconds;
+                                                            // Fixed string interpolation logic
+                                                            string rateStr = rate > 1000000 ? $"{rate/1000000:F2} M/s" : $"{rate:N0} p/s";
+                                                            
+                                                            Console.Title = $"ZCracker | Speed: {rateStr} | Attempts: {current:N0}";
+                                                            Console.Write($"\rSpeed: {rateStr} | Total: {current:N0} | Time: {stopwatch.Elapsed:hh\\:mm\\:ss}");
+                                                        }
+                                                    }, cts.Token);
+                                
+                                                    // Channel for Producer-Consumer
+                                                    var channel = Channel.CreateBounded<PasswordBatch>(new BoundedChannelOptions(100) 
+                                                    {
+                                                        SingleWriter = true,
+                                                        SingleReader = false,
+                                                        FullMode = BoundedChannelFullMode.Wait
+                                                    });
+                                
+                                                    // Producer Task
+                                                    var producer = Task.Run(() => 
+                                                    {
+                                                        try
+                                                        {
+                                                            reader.ProduceBatches(channel.Writer, cts.Token);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            Console.WriteLine($"Producer Error: {ex.Message}");
+                                                            channel.Writer.Complete(ex);
+                                                        }
+                                                    });
+                                
+                                                    // Consumer Tasks
+                                                    int consumersCount = Environment.ProcessorCount;
+                                                    var consumers = new Task[consumersCount];
+                                
+                                                    for (int i = 0; i < consumersCount; i++)
+                                                    {
+                                                        consumers[i] = Task.Run(async () => 
+                                                        {
+                                                            // Initialize engines (only if needed)
+                                                            var simdEngine = metadata.CompressionMethod != 99 ? new SimdZipCryptoEngine() : null;
+                                                            var scalarEngine = metadata.CompressionMethod != 99 ? new ZipCryptoEngine() : null; 
+                                                            
+                                                            IntPtr ptrsBuffer = Marshal.AllocHGlobal(8 * IntPtr.Size);
+                                                            IntPtr lensBuffer = Marshal.AllocHGlobal(8 * sizeof(int));
+                                                            
+                                                            try
+                                                            {
+                                                                while (await channel.Reader.WaitToReadAsync(cts.Token))
+                                                                {
+                                                                    while (channel.Reader.TryRead(out PasswordBatch batch))
+                                                                    {
+                                                                        if (_found) break;
+                                
+                                                                        // AES Handling (Method 99)
+                                                                        if (metadata.CompressionMethod == 99)
+                                                                        {
+                                                                            // Process batch linearly (PBKDF2 is slow, SIMD doesn't help much with HMAC-SHA1 easily)
+                                                                            for(int k=0; k < batch.Count; k++)
+                                                                            {
+                                                                                if (_found) break;
+                                                                                var entry = batch.Get(k);
+                                                                                string candidate = entry.ToString();
+                                                                                
+                                                                                if (metadata.AesSalt != null && metadata.AesVerifier != null)
+                                                                                {
+                                                                                    if (AesZipCryptoEngine.CheckPassword(candidate, metadata.AesSalt, metadata.AesVerifier, metadata.KeyStrengthInBits))
+                                                                                    {
+                                                                                        _foundPassword = candidate;
+                                                                                        _found = true;
+                                                                                        cts.Cancel();
+                                                                                        return;
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        // Legacy ZipCrypto Handling
+                                                                        else 
+                                                                        {
+                                                                            unsafe 
+                                                                            {
+                                                                                byte** ptrs = (byte**)ptrsBuffer;
+                                                                                int* lens = (int*)lensBuffer;
+                                
+                                                                                for(int j=0; j < batch.Count; j += 8)
+                                                                                {
+                                                                                    int remaining = Math.Min(8, batch.Count - j);
+                                                                                    
+                                                                                    for(int k=0; k < remaining; k++)
+                                                                                    {
+                                                                                        ptrs[k] = (byte*)batch.Pointers[j+k];
+                                                                                        lens[k] = batch.Lengths[j+k];
+                                                                                    }
+                                                                                    for(int k=remaining; k<8; k++) lens[k] = 0;
+                                
+                                                                                    // Pass HeaderVerifier (the fast check value)
+                                                                                    // Note: We need to use SimdZipCryptoEngine if initialized
+                                                                                    int result = simdEngine!.CheckBatch(metadata.EncryptionHeader, metadata.HeaderVerifier, ptrs, lens);
+                                                                                    
+                                                                                    if (result != -1)
+                                                                                    {
+                                                                                        // Scalar Check ALL matches in this batch (False positive elimination)
+                                                                                        for(int k=0; k < remaining; k++)
+                                                                                        {
+                                                                                            int idx = j + k;
+                                                                                            var entry = batch.Get(idx);
+                                                                                            string candidate = entry.ToString();
+                                                                                            
+                                                                                            // Fast Scalar Check with HeaderVerifier
+                                                                                            if (scalarEngine!.CheckPassword(metadata.EncryptionHeader, metadata.HeaderVerifier, candidate))
+                                                                                            {
+                                                                                                // Deep Verify with Real CRC32 or Decompression
+                                                                                                if (ZipVerifier.Verify(candidate, archivePath, metadata))
+                                                                                                {
+                                                                                                    _foundPassword = candidate;
+                                                                                                    _found = true;
+                                                                                                    cts.Cancel();
+                                                                                                    return;
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        Interlocked.Add(ref _attempts, batch.Count);
+                                                                    }
+                                                                }
+                                                            }
+                                                            catch (OperationCanceledException) { }
+                                                            finally
+                                                            {
+                                                                Marshal.FreeHGlobal(ptrsBuffer);
+                                                                Marshal.FreeHGlobal(lensBuffer);
+                                                            }
+                                                        });
+                                                    }
                     try
                     {
                         await Task.WhenAny(Task.WhenAll(consumers), Task.Delay(Timeout.Infinite, cts.Token));
