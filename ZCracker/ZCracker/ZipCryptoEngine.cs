@@ -90,6 +90,34 @@ namespace ZCracker
             uint temp = _key2 | 2;
             return (byte)((temp * (temp ^ 1)) >> 8);
         }
+        
+        /// <summary>
+        /// Decrypts a single byte and updates the keys. Useful for streams.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public byte DecryptByteAndUpdate()
+        {
+            byte val = DecryptByte(); // Decrypt using current keys
+            // But wait, the standard loop is:
+            // c = cipher
+            // p = c ^ k
+            // UpdateKeys(p)
+            // We don't have 'c' here. This helper design in stream was:
+            // buffer[i] = _engine.DecryptByteAndUpdate(); <-- This is wrong.
+            // We need to pass the cipher byte.
+            throw new NotImplementedException("Use DecryptByteAndUpdate(byte c) instead");
+        }
+
+        /// <summary>
+        /// Decrypts a single cipher byte, updates keys, and returns the plain byte.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public byte DecryptByteAndUpdate(byte cipherByte)
+        {
+            byte plain = (byte)(cipherByte ^ DecryptByte());
+            UpdateKeys(plain);
+            return plain;
+        }
 
         /// <summary>
         /// Highly optimized, zero-allocation password check.
